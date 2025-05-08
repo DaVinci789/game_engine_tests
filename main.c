@@ -1,3 +1,17 @@
+#pragma comment(lib, "kernel32.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "oleaut32.lib")
+#pragma comment(lib, "uuid.lib")
+#pragma comment(lib, "comdlg32.lib")
+#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "raylib.lib")
+
+#define countof(a) (sizeof(a) / sizeof(a[0]))
+
 float tick_nums[] = {
     1.0f,
     2.0f,
@@ -97,9 +111,8 @@ void game_tick(Game *game, Input input, float delta)
     game->player_moving     = moving;
 }
 
-void game_draw(Game game)
+void game_draw(Game game, Color tint)
 {
-    Color tint = WHITE;
     int PIXEL_SCALE = 5;
 
     // Player
@@ -137,99 +150,12 @@ void game_draw(Game game)
         /* } */
 
         /* DrawTexturePro(tex, src_rect, dst_rect, {dst_rect.width * 0.5, dst_rect.height * 0.5}, 0, tint) */
-        DrawRectangle(game.player_pos.x, game.player_pos.y, 10, 20, RED);
+        DrawRectangle(game.player_pos.x, game.player_pos.y, 10, 20, tint);
     }
 }
 
-#if 0
-int main(void)
-{
-    InitWindow(1000, 700, "Fixed Timestep Demo");
-    
-    Input tick_input = {0};
-    Game game = {0};
-    Game temp_game = {0};
-
-    int delta_index = 6;
-    float accumulator = 0;
-    float frame_time = 1.0 / 60.0;
-    double last_time = GetTime();
-
-    while (!WindowShouldClose())
-    {
-        double current_time = GetTime();
-        frame_time = current_time - last_time;
-        last_time = current_time;
-        if (frame_time > 0.25) frame_time = 0.25; // max 250ms lag
-
-        PollInputEvents();              // Poll input events (SUPPORT_CUSTOM_FRAME_CONTROL)
-        BeginDrawing();
-        ClearBackground((Color) {40, 45, 50, 255});
-
-        float target_delta = 1.0 / tick_nums[delta_index];
-        accumulator += frame_time;
-
-        Input frame_input = {0};
-        frame_input.cursor = GetMousePosition();
-        frame_input.actions[INPUT_LEFT ] = input_flags_from_key(KEY_A);
-        frame_input.actions[INPUT_RIGHT] = input_flags_from_key(KEY_D);
-        frame_input.actions[INPUT_UP   ] = input_flags_from_key(KEY_W);
-        frame_input.actions[INPUT_DOWN ] = input_flags_from_key(KEY_S);
-        frame_input.actions[INPUT_DASH ] = input_flags_from_key(KEY_SPACE);
-        frame_input.actions[INPUT_SHOOT] = input_flags_from_key(KEY_M);
-
-        tick_input.cursor = frame_input.cursor;
-        for (int action = 0; action < INPUT_ACTION_COUNT; ++action) {
-            tick_input.actions[action] |= frame_input.actions[action];
-        }
-
-        // Fixed Render Tick
-        _Bool any_tick = accumulator > target_delta;
-
-        for (;accumulator > target_delta; accumulator -= target_delta) {
-            game_tick(&game, tick_input, target_delta);
-            input_clear_temp(&tick_input);
-        }
-        TraceLog(LOG_INFO, "%f %f", accumulator, target_delta);
-
-        memcpy(&temp_game, &game, sizeof(Game));
-        game_tick(&temp_game, tick_input, accumulator);
-        game_draw(temp_game);
-
-        if (any_tick) memset(&tick_input, 0, sizeof(tick_input));
-        EndDrawing();
-
-        SwapScreenBuffer();         // Flip the back buffer to screen (front buffer)
-    }
-}
-#endif
-
-typedef union _LARGE_INTEGER {
-  struct {
-    unsigned int LowPart;
-    long  HighPart;
-  } DUMMYSTRUCTNAME;
-  struct {
-    unsigned int LowPart;
-    long  HighPart;
-  } u;
-  long long QuadPart;
-} LARGE_INTEGER;
-
-#define W32(r) __declspec(dllimport) r __stdcall
-W32(int) QueryPerformanceCounter(LARGE_INTEGER *i);
-W32(int) QueryPerformanceFrequency(LARGE_INTEGER *i);
-
-int64_t GetPerformanceCounter(void) {
-    LARGE_INTEGER counter;
-    QueryPerformanceCounter(&counter);
-    return (int64_t)counter.QuadPart;
-}
-int64_t GetPerformanceFrequency(void) {
-    LARGE_INTEGER freq;
-    QueryPerformanceFrequency(&freq);
-    return (int64_t)freq.QuadPart;
-}
+#include "os_interface.c"
+#include "os_windows.c"
 
 #define TICK_HZ 15
 #define MAX_FRAME_SKIP 8
@@ -237,76 +163,111 @@ int64_t GetPerformanceFrequency(void) {
 
 int main(void)
 {
-    SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
+    // SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(1000, 700, "Fixed Timestep Raylib");
 
     Input tick_input = {0};
     Game game = {0};
     Game temp_game = {0};
 
-    double target_delta = 1.0 / TICK_HZ;
-    int64_t perf_freq = (int64_t)GetTime() * 0 + 1000000000; // assume nanosecond accuracy
+    int user_fps = 60;
 
-    // Simulate performance counter using GetTime
+    int64_t clocks_per_second = GetPerformanceFrequency();
+    /* double fixed_deltatime = 1.0 / TICK_HZ; */
+    /* int64_t desired_frametime = clocks_per_second / TICK_HZ; */
+    double fixed_deltatime = 1.0 / user_fps;
+    int64_t desired_frametime = clocks_per_second / user_fps;
+
+    int64_t vsync_maxerror = desired_frametime * 0.0002; // ~0.2 ms tolerance
+
+    int display_framerate = GetMonitorRefreshRate(GetCurrentMonitor());
+    int64_t snap_hz = display_framerate;
+    if (snap_hz <= 0) snap_hz = 60;
+
     int64_t snap_frequencies[8] = {0};
     for (int i = 0; i < 8; i++) {
-        snap_frequencies[i] = (int64_t)(target_delta * (i + 1) * perf_freq);
+        snap_frequencies[i] = (clocks_per_second / snap_hz) * (i + 1);
     }
 
-    int64_t vsync_maxerror = perf_freq * 0.0002; // ~0.2 ms tolerance
     int64_t time_averager[TIME_HISTORY_COUNT];
-    for (int i = 0; i < TIME_HISTORY_COUNT; ++i) time_averager[i] = (int64_t)(target_delta * perf_freq);
+    for (int i = 0; i < TIME_HISTORY_COUNT; ++i)
+        time_averager[i] = desired_frametime;
     int64_t averager_residual = 0;
 
+    _Bool running = 1;
+    _Bool resync = 1;
+    _Bool vsync = 1;
+    _Bool locked_framerate = 1;
+    int64_t prev_frame_time = GetPerformanceCounter();
     int64_t frame_accumulator = 0;
-    int64_t prev_frame_time = (int64_t)(GetTime() * perf_freq);
-    int64_t desired_frametime = (int64_t)(target_delta * perf_freq);
-
-    bool resync = true;
 
     while (!WindowShouldClose()) {
-        // Fake performance counter using GetTime
-        int64_t now = (int64_t)(GetTime() * perf_freq);
-        int64_t delta_time = now - prev_frame_time;
-        prev_frame_time = now;
+        PollInputEvents();
+        // Allow runtime framerate adjustments
+        if (IsKeyPressed(KEY_UP))   user_fps += 5;
+        if (IsKeyPressed(KEY_DOWN)) user_fps = user_fps > 5 ? user_fps - 5 : 1;
 
-        if (delta_time > desired_frametime * MAX_FRAME_SKIP) delta_time = desired_frametime;
-        if (delta_time < 0) delta_time = 0;
+        // Recompute timing for new target FPS
+        desired_frametime = clocks_per_second / user_fps;
+        fixed_deltatime   = 1.0 / user_fps;
+
+        int64_t current_frame_time = GetPerformanceCounter();
+        int64_t delta_time = current_frame_time - prev_frame_time;
+        prev_frame_time = current_frame_time;
+
+        // handle unexpected timer anomalies (overflow, extra slow frames, etc)
+        if (delta_time > desired_frametime * MAX_FRAME_SKIP)
+        { // ignore extra-slow frames
+            delta_time = desired_frametime;
+        }
+        if (delta_time < 0)
+        {
+            delta_time = 0;
+        }
 
         // Vsync snapping
-        for (int i = 0; i < 8; i++) {
-            if (llabs(delta_time - snap_frequencies[i]) < vsync_maxerror) {
-                delta_time = snap_frequencies[i];
-                break;
+        if (vsync)
+        {
+            for (int i = 0; i < countof(snap_frequencies); i++) {
+                if (llabs(delta_time - snap_frequencies[i]) < vsync_maxerror) {
+                    delta_time = snap_frequencies[i];
+                    break;
+                }
             }
         }
 
-        // Delta averaging
-        for (int i = 0; i < TIME_HISTORY_COUNT - 1; i++)
+        for (int i = 0; i < countof(time_averager) - 1; i++)
+        {
             time_averager[i] = time_averager[i + 1];
-        time_averager[TIME_HISTORY_COUNT - 1] = delta_time;
+        }
+        time_averager[countof(time_averager) - 1] = delta_time;
 
         int64_t sum = 0;
-        for (int i = 0; i < TIME_HISTORY_COUNT; i++)
+        for (int i = 0; i < countof(time_averager); i++)
+        {
             sum += time_averager[i];
-
-        delta_time = sum / TIME_HISTORY_COUNT;
-        averager_residual += sum % TIME_HISTORY_COUNT;
-        delta_time += averager_residual / TIME_HISTORY_COUNT;
-        averager_residual %= TIME_HISTORY_COUNT;
-
-        frame_accumulator += delta_time;
-
-        if (frame_accumulator > desired_frametime * MAX_FRAME_SKIP)
-            resync = true;
-
-        if (resync) {
-            frame_accumulator = 0;
-            delta_time = desired_frametime;
-            resync = false;
         }
 
-        PollInputEvents();
+        delta_time         = sum /               TIME_HISTORY_COUNT;
+        averager_residual += sum %               TIME_HISTORY_COUNT;
+        delta_time        += averager_residual / TIME_HISTORY_COUNT;
+        averager_residual %=                     TIME_HISTORY_COUNT;
+
+        frame_accumulator += delta_time;
+        if (frame_accumulator > desired_frametime * MAX_FRAME_SKIP)
+        {
+            resync = 1;
+        }
+
+        if (resync)
+        {
+            frame_accumulator = 0;
+            delta_time = desired_frametime;
+            resync = 0;
+        }
+
+        // PollInputEvents();
         BeginDrawing();
         ClearBackground((Color){40, 45, 50, 255});
 
@@ -325,23 +286,55 @@ int main(void)
         for (int i = 0; i < INPUT_ACTION_COUNT; ++i)
             tick_input.actions[i] |= frame_input.actions[i];
 
-        double seconds_per_tick = (double)desired_frametime / perf_freq;
+        if (IsKeyPressed(KEY_V)) vsync = !vsync;
+        if (IsKeyPressed(KEY_L)) locked_framerate = !locked_framerate;
+
+        double seconds_per_tick = (double)desired_frametime / clocks_per_second;
 
         _Bool any_tick = frame_accumulator >= desired_frametime;
         while (frame_accumulator >= desired_frametime) {
-            game_tick(&game, tick_input, seconds_per_tick);
+            // game_tick(&game, tick_input, seconds_per_tick);
+            game_tick(&game, tick_input, fixed_deltatime);
             input_clear_temp(&tick_input);
             frame_accumulator -= desired_frametime;
         }
 
         memcpy(&temp_game, &game, sizeof(Game));
+        // game_tick(&temp_game, tick_input, ((double) consumed_delta_time / clocks_per_second));
         game_tick(&temp_game, tick_input, seconds_per_tick * ((double)frame_accumulator / desired_frametime));
-        game_draw(game);
-        game_draw(temp_game);
+        game_draw(game, WHITE);
+        game_draw(temp_game, RED);
+
+        // DrawText(TextFormat("CURRENT FPS: %i", (int)((double) clocks_per_second / (double) delta_time)), GetScreenWidth() - 420, 40, 20, GREEN);
+        DrawText(TextFormat("TARGET FPS: %i | ACTUAL: %i", user_fps, (int)((double) clocks_per_second / (double) delta_time)), GetScreenWidth() - 420, 40, 20, GREEN);
 
         if (any_tick) memset(&tick_input, 0, sizeof(tick_input));
 
         EndDrawing();
+
+        if (locked_framerate)
+        {
+            int64_t time_taken = GetPerformanceCounter() - current_frame_time;
+            int64_t target_frame_time = clocks_per_second / user_fps;
+
+            if (time_taken < target_frame_time)
+            {
+                int64_t sleep_ns = (target_frame_time - time_taken) * 1000000000LL / clocks_per_second;
+                NanoSleep(sleep_ns);
+            }
+        }
+        else if (vsync)
+        {
+            int64_t time_taken = GetPerformanceCounter() - current_frame_time;
+            int64_t target_frame_time = clocks_per_second / GetMonitorRefreshRate(GetCurrentMonitor());
+
+            if (time_taken < target_frame_time)
+            {
+                int64_t sleep_ns = (target_frame_time - time_taken) * 1000000000LL / clocks_per_second;
+                NanoSleep(sleep_ns);
+            }
+        }
+
         SwapScreenBuffer(); // for SUPPORT_CUSTOM_FRAME_CONTROL
     }
 
