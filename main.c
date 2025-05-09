@@ -197,17 +197,13 @@ int main(void)
 
     _Bool running = 1;
     _Bool resync = 1;
-    _Bool vsync = 1;
-    _Bool locked_framerate = 1;
+    _Bool vsync = 0;
+    _Bool locked_framerate = 0;
+
     int64_t prev_frame_time = GetPerformanceCounter();
     int64_t frame_accumulator = 0;
 
     while (!WindowShouldClose()) {
-        PollInputEvents();
-        // Allow runtime framerate adjustments
-        if (IsKeyPressed(KEY_UP))   user_fps += 5;
-        if (IsKeyPressed(KEY_DOWN)) user_fps = user_fps > 5 ? user_fps - 5 : 1;
-
         // Recompute timing for new target FPS
         desired_frametime = clocks_per_second / user_fps;
         fixed_deltatime   = 1.0 / user_fps;
@@ -263,11 +259,12 @@ int main(void)
         if (resync)
         {
             frame_accumulator = 0;
+            // frame_accumulator = desired_frametime;
             delta_time = desired_frametime;
             resync = 0;
         }
 
-        // PollInputEvents();
+        PollInputEvents();
         BeginDrawing();
         ClearBackground((Color){40, 45, 50, 255});
 
@@ -286,9 +283,6 @@ int main(void)
         for (int i = 0; i < INPUT_ACTION_COUNT; ++i)
             tick_input.actions[i] |= frame_input.actions[i];
 
-        if (IsKeyPressed(KEY_V)) vsync = !vsync;
-        if (IsKeyPressed(KEY_L)) locked_framerate = !locked_framerate;
-
         double seconds_per_tick = (double)desired_frametime / clocks_per_second;
 
         _Bool any_tick = frame_accumulator >= desired_frametime;
@@ -302,11 +296,27 @@ int main(void)
         memcpy(&temp_game, &game, sizeof(Game));
         // game_tick(&temp_game, tick_input, ((double) consumed_delta_time / clocks_per_second));
         game_tick(&temp_game, tick_input, seconds_per_tick * ((double)frame_accumulator / desired_frametime));
+
         game_draw(game, WHITE);
         game_draw(temp_game, RED);
 
         // DrawText(TextFormat("CURRENT FPS: %i", (int)((double) clocks_per_second / (double) delta_time)), GetScreenWidth() - 420, 40, 20, GREEN);
         DrawText(TextFormat("TARGET FPS: %i | ACTUAL: %i", user_fps, (int)((double) clocks_per_second / (double) delta_time)), GetScreenWidth() - 420, 40, 20, GREEN);
+
+        // Interpolation percentage
+        double interp_ratio = (double)frame_accumulator / desired_frametime;
+        int bar_width = 200;
+        int bar_height = 10;
+        int bar_x = GetScreenWidth() - 420;
+        int bar_y = 70;
+
+        DrawText(TextFormat("Interp: %.2f%%, F: %d D: %d", interp_ratio * 100.0, frame_accumulator, desired_frametime), bar_x, bar_y - 20, 20, LIGHTGRAY);
+
+        // Draw bar background
+        DrawRectangle(bar_x, bar_y, bar_width, bar_height, DARKGRAY);
+
+        // Draw filled portion of bar
+        DrawRectangle(bar_x, bar_y, (int)(bar_width * interp_ratio), bar_height, ORANGE);
 
         if (any_tick) memset(&tick_input, 0, sizeof(tick_input));
 
@@ -334,6 +344,12 @@ int main(void)
                 NanoSleep(sleep_ns);
             }
         }
+
+        // Allow runtime framerate adjustments
+        if (IsKeyPressed(KEY_UP))   user_fps += 5;
+        if (IsKeyPressed(KEY_DOWN)) user_fps = user_fps > 5 ? user_fps - 5 : 1;
+        if (IsKeyPressed(KEY_V)) vsync = !vsync;
+        if (IsKeyPressed(KEY_L)) locked_framerate = !locked_framerate;
 
         SwapScreenBuffer(); // for SUPPORT_CUSTOM_FRAME_CONTROL
     }
