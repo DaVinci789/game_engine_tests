@@ -10,31 +10,15 @@
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "raylib.lib")
 
-#define countof(a) (sizeof(a) / sizeof(a[0]))
-
-float tick_nums[] = {
-    1.0f,
-    2.0f,
-    4.0f,
-    5.0f,
-    10.0f,
-    15.0f,
-    30.0f,
-    40.0f,
-    50.0f,
-    60.0f,
-    75.0f,
-    100.0f,
-    120.0f,
-    180.0f,
-    240.0f,
-    480.0f,
-}; // basically lets you scale the fps for testing purposes
-#include "raylib.h"
-#include "raymath.h"
+#define assert(c) if (!(c)) __debugbreak()
 
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
+
+#include "raylib.h"
+#include "raymath.h"
+#include "ui.c"
 
 typedef enum {
     INPUT_LEFT,
@@ -150,12 +134,9 @@ void game_draw(Game game, Color tint)
         /* } */
 
         /* DrawTexturePro(tex, src_rect, dst_rect, {dst_rect.width * 0.5, dst_rect.height * 0.5}, 0, tint) */
-        DrawRectangle(game.player_pos.x, game.player_pos.y, 10, 20, tint);
+        DrawRectangle(game.player_pos.x, game.player_pos.y, 40, 80, tint);
     }
 }
-
-#include "os_interface.c"
-#include "os_windows.c"
 
 #define TICK_HZ 15
 #define MAX_FRAME_SKIP 8
@@ -163,110 +144,60 @@ void game_draw(Game game, Color tint)
 
 int main(void)
 {
-    // SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-    InitWindow(1000, 700, "Fixed Timestep Raylib");
+    int game_width = 480;
+    int game_height = 270;
+    int window_width = game_width * 3;
+    int window_height = game_height * 3;
+
+    InitWindow(window_width, window_height, "Fixed Timestep Raylib");
+    RenderTexture2D target = LoadRenderTexture(game_width, game_height);
 
     Input tick_input = {0};
     Game game = {0};
     Game temp_game = {0};
 
+    void *ui_arena_start = malloc(1 << 20);
+    ui_state.arena.beg = ui_arena_start; 
+    ui_state.arena.end = ui_state.arena.beg + (1 << 20);
+
+    ui_state.font = LoadFont("MonteCarloFixed12-Bold.ttf");
+
     int user_fps = 60;
+    SetTargetFPS(user_fps);
 
-    int64_t clocks_per_second = GetPerformanceFrequency();
-    /* double fixed_deltatime = 1.0 / TICK_HZ; */
-    /* int64_t desired_frametime = clocks_per_second / TICK_HZ; */
-    double fixed_deltatime = 1.0 / user_fps;
-    int64_t desired_frametime = clocks_per_second / user_fps;
-
-    int64_t vsync_maxerror = desired_frametime * 0.0002; // ~0.2 ms tolerance
-
-    int display_framerate = GetMonitorRefreshRate(GetCurrentMonitor());
-    int64_t snap_hz = display_framerate;
-    if (snap_hz <= 0) snap_hz = 60;
-
-    int64_t snap_frequencies[8] = {0};
-    for (int i = 0; i < 8; i++) {
-        snap_frequencies[i] = (clocks_per_second / snap_hz) * (i + 1);
-    }
-
-    int64_t time_averager[TIME_HISTORY_COUNT];
-    for (int i = 0; i < TIME_HISTORY_COUNT; ++i)
-        time_averager[i] = desired_frametime;
-    int64_t averager_residual = 0;
-
-    _Bool running = 1;
-    _Bool resync = 1;
     _Bool vsync = 0;
-    _Bool locked_framerate = 0;
 
-    int64_t prev_frame_time = GetPerformanceCounter();
-    int64_t frame_accumulator = 0;
+    float accumulator = 0;
+    while (!WindowShouldClose())
+    {
+        float target_delta = 1.0 / 60.0;
 
-    while (!WindowShouldClose()) {
-        // Recompute timing for new target FPS
-        desired_frametime = clocks_per_second / user_fps;
-        fixed_deltatime   = 1.0 / user_fps;
+        float frame_time = GetFrameTime();
+        accumulator += frame_time;
 
-        int64_t current_frame_time = GetPerformanceCounter();
-        int64_t delta_time = current_frame_time - prev_frame_time;
-        prev_frame_time = current_frame_time;
-
-        // handle unexpected timer anomalies (overflow, extra slow frames, etc)
-        if (delta_time > desired_frametime * MAX_FRAME_SKIP)
-        { // ignore extra-slow frames
-            delta_time = desired_frametime;
+        if (IsKeyPressed(KEY_UP))   {
+            user_fps += 5;
+            SetTargetFPS(user_fps);
         }
-        if (delta_time < 0)
-        {
-            delta_time = 0;
+        if (IsKeyPressed(KEY_DOWN)) {
+            user_fps = user_fps > 5 ? user_fps - 5 : 1;
+            SetTargetFPS(user_fps);
         }
 
-        // Vsync snapping
-        if (vsync)
-        {
-            for (int i = 0; i < countof(snap_frequencies); i++) {
-                if (llabs(delta_time - snap_frequencies[i]) < vsync_maxerror) {
-                    delta_time = snap_frequencies[i];
-                    break;
-                }
+        if (IsKeyPressed(KEY_V)) {
+            vsync = !vsync;
+            if (vsync)
+            {
+                TraceLog(LOG_INFO, "Vsync disabled");
+                SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+            }
+            else
+            {
+                TraceLog(LOG_INFO, "Vsync enabled");
+                SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
             }
         }
-
-        for (int i = 0; i < countof(time_averager) - 1; i++)
-        {
-            time_averager[i] = time_averager[i + 1];
-        }
-        time_averager[countof(time_averager) - 1] = delta_time;
-
-        int64_t sum = 0;
-        for (int i = 0; i < countof(time_averager); i++)
-        {
-            sum += time_averager[i];
-        }
-
-        delta_time         = sum /               TIME_HISTORY_COUNT;
-        averager_residual += sum %               TIME_HISTORY_COUNT;
-        delta_time        += averager_residual / TIME_HISTORY_COUNT;
-        averager_residual %=                     TIME_HISTORY_COUNT;
-
-        frame_accumulator += delta_time;
-        if (frame_accumulator > desired_frametime * MAX_FRAME_SKIP)
-        {
-            resync = 1;
-        }
-
-        if (resync)
-        {
-            frame_accumulator = 0;
-            // frame_accumulator = desired_frametime;
-            delta_time = desired_frametime;
-            resync = 0;
-        }
-
-        PollInputEvents();
-        BeginDrawing();
-        ClearBackground((Color){40, 45, 50, 255});
 
         // Gather frame input
         Input frame_input = {0};
@@ -283,77 +214,59 @@ int main(void)
         for (int i = 0; i < INPUT_ACTION_COUNT; ++i)
             tick_input.actions[i] |= frame_input.actions[i];
 
-        double seconds_per_tick = (double)desired_frametime / clocks_per_second;
-
-        _Bool any_tick = frame_accumulator >= desired_frametime;
-        while (frame_accumulator >= desired_frametime) {
-            // game_tick(&game, tick_input, seconds_per_tick);
-            game_tick(&game, tick_input, fixed_deltatime);
+        _Bool any_tick = accumulator >= target_delta;
+        int num_updates = 0;
+        for (; accumulator >= target_delta; accumulator -= target_delta)
+        {
+            game_tick(&game, tick_input, target_delta);
             input_clear_temp(&tick_input);
-            frame_accumulator -= desired_frametime;
+            num_updates += 1;
         }
+        if (num_updates > 1) TraceLog(LOG_INFO, "%d updates", num_updates);
+
+        if (any_tick) memset(&tick_input, 0, sizeof(tick_input));
 
         memcpy(&temp_game, &game, sizeof(Game));
-        // game_tick(&temp_game, tick_input, ((double) consumed_delta_time / clocks_per_second));
-        game_tick(&temp_game, tick_input, seconds_per_tick * ((double)frame_accumulator / desired_frametime));
+        game_tick(&temp_game, tick_input, accumulator);
 
+        BeginTextureMode(target);
+        ClearBackground((Color){40, 45, 50, 255});
         game_draw(game, WHITE);
         game_draw(temp_game, RED);
+        EndTextureMode();
+
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
+      
+        // The target's height is flipped (in the source Rectangle), due to OpenGL reasons
+        float virtual_ratio = (float)window_width /(float) game_width;
+        Rectangle source_rec = { 0.0f, 0.0f, (float)target.texture.width, -(float)target.texture.height };
+        Rectangle dest_rec = { -virtual_ratio, -virtual_ratio, window_width + (virtual_ratio*2), window_height + (virtual_ratio*2) }; 
+        DrawTexturePro(target.texture, source_rec, dest_rec, (Vector2) {0}, 0.0f, WHITE);
+
+        if (UI_Button(S("Click me!")))
+        {
+            TraceLog(LOG_INFO, "You clicked me!");
+        }
+        UI_Render();
 
         // DrawText(TextFormat("CURRENT FPS: %i", (int)((double) clocks_per_second / (double) delta_time)), GetScreenWidth() - 420, 40, 20, GREEN);
-        DrawText(TextFormat("TARGET FPS: %i | ACTUAL: %i", user_fps, (int)((double) clocks_per_second / (double) delta_time)), GetScreenWidth() - 420, 40, 20, GREEN);
+        DrawText(TextFormat("TARGET FPS: %i | ACTUAL: %i", user_fps, GetFPS()), GetScreenWidth() - 420, 40, 20, GREEN);
 
         // Interpolation percentage
-        double interp_ratio = (double)frame_accumulator / desired_frametime;
+        double interp_ratio = (double)accumulator / target_delta;
         int bar_width = 200;
         int bar_height = 10;
         int bar_x = GetScreenWidth() - 420;
         int bar_y = 70;
 
-        DrawText(TextFormat("Interp: %.2f%%, F: %d D: %d", interp_ratio * 100.0, frame_accumulator, desired_frametime), bar_x, bar_y - 20, 20, LIGHTGRAY);
+        DrawText(TextFormat("Interp: %.2f%%, F: %f D: %f", interp_ratio * 100.0, accumulator, target_delta), bar_x, bar_y - 20, 20, LIGHTGRAY);
 
         // Draw bar background
         DrawRectangle(bar_x, bar_y, bar_width, bar_height, DARKGRAY);
 
         // Draw filled portion of bar
         DrawRectangle(bar_x, bar_y, (int)(bar_width * interp_ratio), bar_height, ORANGE);
-
-        if (any_tick) memset(&tick_input, 0, sizeof(tick_input));
-
         EndDrawing();
-
-        if (locked_framerate)
-        {
-            int64_t time_taken = GetPerformanceCounter() - current_frame_time;
-            int64_t target_frame_time = clocks_per_second / user_fps;
-
-            if (time_taken < target_frame_time)
-            {
-                int64_t sleep_ns = (target_frame_time - time_taken) * 1000000000LL / clocks_per_second;
-                NanoSleep(sleep_ns);
-            }
-        }
-        else if (vsync)
-        {
-            int64_t time_taken = GetPerformanceCounter() - current_frame_time;
-            int64_t target_frame_time = clocks_per_second / GetMonitorRefreshRate(GetCurrentMonitor());
-
-            if (time_taken < target_frame_time)
-            {
-                int64_t sleep_ns = (target_frame_time - time_taken) * 1000000000LL / clocks_per_second;
-                NanoSleep(sleep_ns);
-            }
-        }
-
-        // Allow runtime framerate adjustments
-        if (IsKeyPressed(KEY_UP))   user_fps += 5;
-        if (IsKeyPressed(KEY_DOWN)) user_fps = user_fps > 5 ? user_fps - 5 : 1;
-        if (IsKeyPressed(KEY_V)) vsync = !vsync;
-        if (IsKeyPressed(KEY_L)) locked_framerate = !locked_framerate;
-
-        SwapScreenBuffer(); // for SUPPORT_CUSTOM_FRAME_CONTROL
     }
-
-    CloseWindow();
-    return 0;
 }
