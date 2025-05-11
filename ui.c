@@ -196,6 +196,11 @@ void UI_RenderWidget(UI_Widget *widget)
         DrawRectangleRec(widget->rect, GRAY);
     }
 
+    if (widget->flags & UI_WidgetFlag_AnimationHot)
+    {
+        DrawRectangleRec(widget->rect, GRAY);
+    }
+
     if (widget->flags & UI_WidgetFlag_DrawBackground)
     {
         DrawRectangleRec(widget->rect, GRAY);
