@@ -45,25 +45,26 @@ void *alloc(Arena *a, ptrdiff_t count, ptrdiff_t size, ptrdiff_t align)
 
 typedef enum
 {
-    UI_WidgetFlag_Clickable,
-    UI_WidgetFlag_DrawBorder,
-    UI_WidgetFlag_DrawText,
-    UI_WidgetFlag_DrawBackground,
-    UI_WidgetFlag_AnimationHot,
-    UI_WidgetFlag_AnimationActive,
-} UI_WidgetFlag;
+    UI_BoxFlag_Clickable,
+    UI_BoxFlag_DrawBorder,
+    UI_BoxFlag_DrawText,
+    UI_BoxFlag_DrawBackground,
+    UI_BoxFlag_AnimationHot,
+    UI_BoxFlag_AnimationActive,
+} UI_BoxFlag;
 
 
-typedef struct UI_Widget UI_Widget;
-struct UI_Widget
+typedef struct UI_Box UI_Box;
+struct UI_Box
 {
-    UI_Widget *first;
-    UI_Widget *last;
-    UI_Widget *next;
-    UI_Widget *prev;
-    UI_Widget *parent;
+    UI_Box *first;
+    UI_Box *last;
+    UI_Box *next;
+    UI_Box *prev;
+    UI_Box *parent;
 
-    UI_WidgetFlag flags;
+    // builder parameters
+    UI_BoxFlag flags;
     Str string;
 
     // generation info
@@ -81,7 +82,7 @@ struct UI_Widget
 
 typedef struct
 {
-    UI_Widget *widget;
+    UI_Box *widget;
     Vector2 mouse;
     Vector2 drag_delta;
     _Bool clicked;
@@ -98,14 +99,14 @@ struct UI_Map
 {
     UI_Map *child[4];
     Str key;
-    UI_Widget *value;
+    UI_Box *value;
 };
 
 typedef struct
 {
     Arena arena;
     UI_Map *map;
-    UI_Widget *start;
+    UI_Box *start;
 
     Vector2 starting_origin;
     Font font;
@@ -113,7 +114,7 @@ typedef struct
 
 UI_State ui_state = {0};
 
-UI_Widget **UI_Lookup(UI_Map **map, Str key, Arena *a)
+UI_Box **UI_Lookup(UI_Map **map, Str key, Arena *a)
 {
     uint64_t h = hash64(key);
     while (*map)
@@ -133,15 +134,15 @@ UI_Widget **UI_Lookup(UI_Map **map, Str key, Arena *a)
     return &(*map)->value;
 }
 
-UI_Widget *UI_WidgetMake(UI_WidgetFlag flags, Str string)
+UI_Box *UI_BoxMake(UI_BoxFlag flags, Str string)
 {
-    UI_Widget **slot = UI_Lookup(&ui_state.map, string, &ui_state.arena);
+    UI_Box **slot = UI_Lookup(&ui_state.map, string, &ui_state.arena);
     if (!*slot)
     {
-        *slot = new(&ui_state.arena, 1, UI_Widget);
+        *slot = new(&ui_state.arena, 1, UI_Box);
     }
 
-    UI_Widget *widget = *slot;
+    UI_Box *widget = *slot;
     widget->flags = flags;
     widget->string = string;
 
@@ -160,7 +161,7 @@ UI_Widget *UI_WidgetMake(UI_WidgetFlag flags, Str string)
     return widget;
 }
 
-UI_Comm UI_CommFromWidget(UI_Widget *widget)
+UI_Comm UI_CommFromWidget(UI_Box *widget)
 {
     Vector2 mouse = GetMousePosition();
 
@@ -177,43 +178,43 @@ UI_Comm UI_CommFromWidget(UI_Widget *widget)
 
 _Bool UI_Button(Str text)
 {
-    UI_Widget *widget = UI_WidgetMake(UI_WidgetFlag_Clickable |
-                                      UI_WidgetFlag_DrawBorder |
-                                      UI_WidgetFlag_DrawBackground |
-                                      UI_WidgetFlag_DrawText |
-                                      UI_WidgetFlag_AnimationHot |
+    UI_Box *widget = UI_BoxMake(UI_BoxFlag_Clickable |
+                                      UI_BoxFlag_DrawBorder |
+                                      UI_BoxFlag_DrawBackground |
+                                      UI_BoxFlag_DrawText |
+                                      UI_BoxFlag_AnimationHot |
                                       text);
     UI_Comm comm = UI_CommFromWidget(widget);
     return comm.clicked;
 }
 
-void UI_RenderWidget(UI_Widget *widget)
+void UI_RenderWidget(UI_Box *widget)
 {
     if (!widget) return;
 
-    if (widget->flags & UI_WidgetFlag_DrawBackground)
+    if (widget->flags & UI_BoxFlag_DrawBackground)
     {
         DrawRectangleRec(widget->rect, GRAY);
     }
 
-    if (widget->flags & UI_WidgetFlag_AnimationHot)
+    if (widget->flags & UI_BoxFlag_AnimationHot)
     {
         DrawRectangleRec(widget->rect, GRAY);
     }
 
-    if (widget->flags & UI_WidgetFlag_DrawBackground)
+    if (widget->flags & UI_BoxFlag_DrawBackground)
     {
         DrawRectangleRec(widget->rect, GRAY);
     }
 
     // Draw border if requested
-    if (widget->flags & UI_WidgetFlag_DrawBorder)
+    if (widget->flags & UI_BoxFlag_DrawBorder)
     {
         DrawRectangleLinesEx(widget->rect, 2.0f, DARKGRAY);
     }
 
     // Draw text if requested
-    if (widget->flags & UI_WidgetFlag_DrawText)
+    if (widget->flags & UI_BoxFlag_DrawText)
     {
         const char *text = widget->string.data;
         int fontSize = 20;
@@ -228,7 +229,7 @@ void UI_RenderWidget(UI_Widget *widget)
 
 void UI_Render()
 {
-    for (UI_Widget *child = ui_state.start; child; child = child->next)
+    for (UI_Box *child = ui_state.start; child; child = child->next)
     {
         UI_RenderWidget(child);
     }
