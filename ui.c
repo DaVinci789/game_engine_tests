@@ -45,6 +45,105 @@ void *alloc(Arena *a, ptrdiff_t count, ptrdiff_t size, ptrdiff_t align)
 
 typedef enum
 {
+    RectCut_Left,
+    RectCut_Right,
+    RectCut_Top,
+    RectCut_Bottom,
+} RectCutSide;
+
+typedef struct
+{
+    Rectangle result;
+    Rectangle remainder;
+    RectCutSide side;
+    _Bool ok;
+} RectCut;
+
+#define min(a, b) ((a) < (b) ? (a) : (b))
+
+RectCut cut_left(Rectangle rect, float a)
+{
+    RectCut result = {0};
+    result.ok = rect.width > 0 && a > 0;
+    result.side = RectCut_Left;
+
+    float cut = min(a, rect.width);
+    result.result = rect;
+    result.result.width = cut;
+
+    result.remainder = rect;
+    result.remainder.x += cut;
+    result.remainder.width -= cut;
+
+    return result;
+}
+
+RectCut cut_right(Rectangle rect, float a)
+{
+    RectCut result = {0};
+    result.ok = rect.width > 0 && a > 0;
+    result.side = RectCut_Right;
+
+    float cut = min(a, rect.width);
+    result.result = rect;
+    result.result.x = rect.x + rect.width - cut;
+    result.result.width = cut;
+
+    result.remainder = rect;
+    result.remainder.width -= cut;
+
+    return result;
+}
+
+RectCut cut_top(Rectangle rect, float a)
+{
+    RectCut result = {0};
+    result.ok = rect.height > 0 && a > 0;
+    result.side = RectCut_Top;
+
+    float cut = min(a, rect.height);
+    result.result = rect;
+    result.result.height = cut;
+
+    result.remainder = rect;
+    result.remainder.y += cut;
+    result.remainder.height -= cut;
+
+    return result;
+}
+
+RectCut cut_bottom(Rectangle rect, float a)
+{
+    RectCut result = {0};
+    result.ok = rect.height > 0 && a > 0;
+    result.side = RectCut_Bottom;
+
+    float cut = min(a, rect.height);
+    result.result = rect;
+    result.result.y = rect.y + rect.height - cut;
+    result.result.height = cut;
+
+    result.remainder = rect;
+    result.remainder.height -= cut;
+
+    return result;
+}
+
+RectCut cut_side(RectSide rect, float a)
+{
+    RectSide result = {0};
+    switch (rect.side)
+    {
+        case RectCut_Left:   result = cut_left(rect.result,   a);
+        case RectCut_Right:  result = cut_right(rect.result,  a);
+        case RectCut_Top:    result = cut_top(rect.result,    a);
+        case RectCut_Bottom: result = cut_bottom(rect.result, a);
+    }
+    return result;
+}
+
+typedef enum
+{
     UI_BoxFlag_Clickable,
     UI_BoxFlag_DrawBorder,
     UI_BoxFlag_DrawText,
@@ -187,7 +286,7 @@ UI_Box *UI_BoxMake(UI_BoxFlag flags, Str string)
     box->rect.width = box->size.x;
     box->rect.height = box->size.y;
     
-    UI_Box *parent = ui_state.parent_stack.top->v;
+    UI_Box *parent = ui_state.parent_stack.top->value;
     if (UI_BoxIsNil(parent)) // Parent stuff
     {
         ui_state.root = box;
@@ -235,6 +334,7 @@ UI_Comm UI_CommFromBox(UI_Box *box)
     c.box = box;
     c.mouse = mouse;
 
+    // Handle these function within BeginBuild/EndBuild
     c.hovering = CheckCollisionPointRec(mouse, box->rect);
     c.pressed = c.hovering && IsMouseButtonDown(MOUSE_LEFT_BUTTON);
     c.clicked = c.hovering && IsMouseButtonReleased(MOUSE_LEFT_BUTTON);
@@ -253,6 +353,49 @@ _Bool UI_Button(Str text)
     UI_Comm comm = UI_CommFromBox(box);
     return comm.clicked;
 }
+
+UI_Box *UI_PushParent(UI_Box *box)
+{
+    UI_ParentNode *node = ui_state->parent_stack.free;
+    if (node)
+    {
+        StackPop(ui_state->parent_stack.free);
+    }
+    else
+    {
+        node = new(&ui_state.arena, UI_ParentNode, 1);
+    }
+
+    UI_Box *old_value = ui_state.parent_stack.top->value;
+    node->value = box;
+
+    // StackPush(ui_state.parent_stack.top, node);
+    node->next = ui_state.parent_stack.top;
+    ui_state.parent_stack.top = node;
+
+    return old_value;
+}
+
+UI_Box *UI_PopParent(void)
+{
+    UI_ParentNode *popped = ui_state->parent_stack.top;
+    if (popped != &ui_state->parent_nil_stack_top)
+    {
+        // StackPop(ui_state->parent_stack.top);
+        if (ui_state.parent_stack.top)
+        {
+            ui_state.parent.top = ui_state.parent.top->next;
+        }
+
+        // StackPush(ui_state->parent_stack.free, popped);
+        popped->next = ui_state.parent_stack.free;
+        ui_state.parent_stack.top = popped;
+    }
+
+    return popped;
+}
+
+#define UI_Parent(v) DeferLoop(UI_PushParent(v), UI_PopParent())
 
 void UI_RenderBox(UI_Box *box)
 {
