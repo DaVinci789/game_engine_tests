@@ -59,7 +59,7 @@ typedef struct
     _Bool ok;
 } RectCut;
 
-#define min(a, b) ((a) < (b) ? (a) : (b))
+// #define min(a, b) ((a) < (b) ? (a) : (b))
 
 RectCut cut_left(Rectangle rect, float a)
 {
@@ -129,9 +129,9 @@ RectCut cut_bottom(Rectangle rect, float a)
     return result;
 }
 
-RectCut cut_side(RectSide rect, float a)
+RectCut cut_side(RectCut rect, float a)
 {
-    RectSide result = {0};
+    RectCut result = {0};
     switch (rect.side)
     {
         case RectCut_Left:   result = cut_left(rect.result,   a);
@@ -152,7 +152,6 @@ typedef enum
     UI_BoxFlag_AnimationActive,
 } UI_BoxFlag;
 
-
 typedef struct UI_Box UI_Box;
 struct UI_Box
 {
@@ -168,9 +167,11 @@ struct UI_Box
     UI_BoxFlag flags;
     Str string;
 
-    // computed every frame ...usually
+    // initialize by builder code, but can be modified.
     Vector2 size;
     Vector2 position;
+
+    // computed every frame
     Rectangle rect;
 
     // generation info
@@ -227,16 +228,39 @@ typedef struct
 
 UI_State ui_state = {0};
 
-UI_Box ui_g_nil_box =
-{
- &ui_g_nil_box,
- &ui_g_nil_box,
- &ui_g_nil_box,
- &ui_g_nil_box,
- &ui_g_nil_box,
- &ui_g_nil_box,
- &ui_g_nil_box,
+#ifdef _MSC_VER
+
+UI_Box ui_g_nil_box = {0};
+
+void UI_InitGlobals(void) {
+ ui_g_nil_box.first  = &ui_g_nil_box;
+ ui_g_nil_box.last   = &ui_g_nil_box;
+ ui_g_nil_box.next   = &ui_g_nil_box;
+ ui_g_nil_box.prev   = &ui_g_nil_box;
+ ui_g_nil_box.parent = &ui_g_nil_box;
+
+    ui_state.parent_nil_stack_top.value = &ui_g_nil_box;
+    ui_state.parent_nil_stack_top.next = 0;
+    ui_state.parent_stack.top = &ui_state.parent_nil_stack_top;
+}
+
+#else
+
+UI_Box ui_g_nil_box = (UI_Box){
+ .first  = &ui_g_nil_box,
+ .last   = &ui_g_nil_box,
+ .next   = &ui_g_nil_box,
+ .prev   = &ui_g_nil_box,
+ .parent = &ui_g_nil_box,
 };
+
+void UI_InitGlobals(void) {
+
+    ui_state.parent_nil_stack_top.value = &ui_g_nil_box;
+    ui_state.parent_nil_stack_top.next = 0;
+    ui_state.parent_stack.top = &ui_state.parent_nil_stack_top;
+}
+#endif
 
 _Bool UI_BoxIsNil(UI_Box *b) {
     return b == &ui_g_nil_box;
@@ -259,19 +283,21 @@ UI_Box **UI_Lookup(UI_Map **map, Str key, Arena *a)
 
     *map = new(a, 1, UI_Map);
     (*map)->key = key;
-    (*map)->value = &ui_g_nil_box;
+    // (*map)->value = &ui_g_nil_box;
+    (*map)->value = new(&ui_state.arena, 1, UI_Box);
+    (*map)->value->first  = &ui_g_nil_box;
+    (*map)->value->last   = &ui_g_nil_box;
+    (*map)->value->next   = &ui_g_nil_box;
+    (*map)->value->prev   = &ui_g_nil_box;
+    (*map)->value->parent = &ui_g_nil_box;
     return &(*map)->value;
 }
 
 UI_Box *UI_BoxMake(UI_BoxFlag flags, Str string)
 {
     UI_Box **slot = UI_Lookup(&ui_state.map, string, &ui_state.arena);
-    if (UI_BoxIsNil(*slot))
-    {
-        *slot = new(&ui_state.arena, 1, UI_Box);
-    }
-
     UI_Box *box = *slot;
+
     box->flags = flags;
 
     if (flags & UI_BoxFlag_DrawText)
@@ -298,6 +324,7 @@ UI_Box *UI_BoxMake(UI_BoxFlag flags, Str string)
             // List is empty
             parent->first = box;
             parent->last = box;
+            parent->next = box;
             UI_BoxSetNil(box->next);
             UI_BoxSetNil(box->prev);
         } else if (UI_BoxIsNil(parent->last)) {
@@ -331,7 +358,7 @@ UI_Comm UI_CommFromBox(UI_Box *box)
     Vector2 mouse = GetMousePosition();
 
     UI_Comm c = {0};
-    c.box = box;
+    c.widget = box;
     c.mouse = mouse;
 
     // Handle these function within BeginBuild/EndBuild
@@ -348,22 +375,42 @@ _Bool UI_Button(Str text)
                                       UI_BoxFlag_DrawBorder |
                                       UI_BoxFlag_DrawBackground |
                                       UI_BoxFlag_DrawText |
-                                      UI_BoxFlag_AnimationHot |
-                                      text);
+                                      UI_BoxFlag_AnimationHot
+                             , text);
     UI_Comm comm = UI_CommFromBox(box);
     return comm.clicked;
 }
 
+UI_Box *UI_Panel(int x, int y, int w, int h, Str text)
+{
+    UI_Box *box = UI_BoxMake(UI_BoxFlag_DrawBorder |
+                             UI_BoxFlag_DrawBackground
+                             , text);
+    box->position.x = x;
+    box->position.y = y;
+    box->size.x = w;
+    box->size.y = h;
+
+    box->rect.x = box->position.x;
+    box->rect.y = box->position.y;
+    box->rect.width = box->size.x;
+    box->rect.height = box->size.y;
+    return box;
+}
+
 UI_Box *UI_PushParent(UI_Box *box)
 {
-    UI_ParentNode *node = ui_state->parent_stack.free;
+    UI_ParentNode *node = ui_state.parent_stack.free;
     if (node)
     {
-        StackPop(ui_state->parent_stack.free);
+        if (ui_state.parent_stack.free)
+        {
+            ui_state.parent_stack.free = ui_state.parent_stack.free->next;
+        }
     }
     else
     {
-        node = new(&ui_state.arena, UI_ParentNode, 1);
+        node = new(&ui_state.arena, 1, UI_ParentNode);
     }
 
     UI_Box *old_value = ui_state.parent_stack.top->value;
@@ -378,13 +425,13 @@ UI_Box *UI_PushParent(UI_Box *box)
 
 UI_Box *UI_PopParent(void)
 {
-    UI_ParentNode *popped = ui_state->parent_stack.top;
-    if (popped != &ui_state->parent_nil_stack_top)
+    UI_ParentNode *popped = ui_state.parent_stack.top;
+    if (popped != &ui_state.parent_nil_stack_top)
     {
         // StackPop(ui_state->parent_stack.top);
         if (ui_state.parent_stack.top)
         {
-            ui_state.parent.top = ui_state.parent.top->next;
+            ui_state.parent_stack.top = ui_state.parent_stack.top->next;
         }
 
         // StackPush(ui_state->parent_stack.free, popped);
@@ -392,15 +439,14 @@ UI_Box *UI_PopParent(void)
         ui_state.parent_stack.top = popped;
     }
 
-    return popped;
+    return popped->value;
 }
 
+#define DeferLoop(begin, end) for(int _i_ = ((begin), 0); !_i_; _i_ += 1, (end))
 #define UI_Parent(v) DeferLoop(UI_PushParent(v), UI_PopParent())
 
 void UI_RenderBox(UI_Box *box)
 {
-    if (!box) return;
-
     if (box->flags & UI_BoxFlag_DrawBackground)
     {
         DrawRectangleRec(box->rect, GRAY);
@@ -438,19 +484,43 @@ void UI_RenderBox(UI_Box *box)
 
 void UI_BeginBuild(int win_x, int win_y, float dt)
 {
+    ui_state.parent_stack.top = &ui_state.parent_nil_stack_top;
+    ui_state.parent_stack.free = 0;
 }
 
 void UI_EndBuild()
 {
 }
 
+void UI_Solve(UI_Box *box)
+{
+    if (UI_BoxIsNil(box->parent))
+    {
+        box->rect.x = box->position.x;
+        box->rect.y = box->position.y;
+    }
+    else
+    {
+        box->rect.x = box->parent->rect.x + box->position.x;
+        box->rect.y = box->parent->rect.y + box->position.y;
+    }
+
+    box->rect.width  = box->size.x;
+    box->rect.height = box->size.y;
+
+    for (UI_Box *child = box->first; !UI_BoxIsNil(child); child = child->next)
+    {
+        UI_Solve(child);
+    }
+}
+
 void UI_Render()
 {
-    for (UI_Box *child = ui_state.start; child; child = child->next)
+    for (UI_Box *child = ui_state.root; !UI_BoxIsNil(child); child = child->next)
     {
         UI_RenderBox(child);
     }
-    ui_state.start = 0;
+    ui_state.root = 0;
 }
 
 #ifdef ENGINE_UNIT
@@ -464,14 +534,19 @@ int main(void)
     while (!WindowShouldClose())
     {
         UI_BeginBuild(480, 270, 1.0 / 60.0f);
-        if (UI_Button(S("Click me!")))
+
+        UI_Box *panel = UI_Panel(30, 30, 200, 200, "The Panel");
+        UI_Parent(panel)
         {
-            TraceLog(LOG_INFO, "You clicked me!");
+            if (UI_Button(S("Click me!")))
+            {
+                TraceLog(LOG_INFO, "You clicked me!");
+            }
         }
-        UI_EndBuild();
+
+        UI_Solve(panel);
         
         BeginDrawing();
-
         ClearBackground(RAYWHITE);
         UI_Render();
         EndDrawing();
